@@ -2,16 +2,23 @@
 #include <Wire.h>
 #include <SSCI_BME280.h>
 #include <WioCellLibforArduino.h>
+#include <String.h>
+
 
 #define BME280_ADDRESS 0x76
 #define UUID "Test0001"
-#define APN               "[INPUT APN]"
-#define USERNAME          "[INPUT USERNAME]"
-#define PASSWORD          "[INPUT PASSWORD]"
+#define APN               "soracom.io"
+#define USERNAME          "sora"
+#define PASSWORD          "sora"
 #define INTERVAL 5000
+#define READGPS WIO_UART_D23
+
 WioCellular Wio;
+char buff[128] = {'\0'};
+int counter = 0;
 unsigned long int hum_raw, temp_raw, pres_raw;
 signed long int t_fine;
+String input;
 
 uint16_t dig_T1;
 int16_t dig_T2;
@@ -46,17 +53,18 @@ void setup() {
   uint8_t ctrl_hum_reg  = osrs_h;
 
   SerialUSB.begin(115200);
+  SerialUART.begin(4800);
   Wire.begin();
-
   writeReg(0xF2, ctrl_hum_reg);
   writeReg(0xF4, ctrl_meas_reg);
   writeReg(0xF5, config_reg);
   readTrim();
 
   Wio.Init();
-  
+
   SerialUSB.println("### Power supply ON.");
   Wio.PowerSupplyCellular(true);
+  Wio.PowerSupplyGrove(true);
   delay(500);
 
   SerialUSB.println("### Turn on or reset.");
@@ -74,12 +82,20 @@ void setup() {
     SerialUSB.println("### ERROR! ###");
     return;
   }
-
+  SerialUART.write("$PUNV,GETCONFIG,00*41");
+  if (SerialUART.available() > 0)
+  {
+    input = SerialUART.readStringUntil('\n');
+    SerialUSB.println(input);
+  }else{
+    SerialUSB.println("No date found");
+    }
   SerialUSB.println("### Setup completed.");
 }
 
 void loop()
 {
+  input ="";
   double temp_act = 0.0, press_act = 0.0, hum_act = 0.0;
   signed long int temp_cal;
   unsigned long int press_cal, hum_cal;
@@ -112,13 +128,22 @@ void loop()
   root["humidity"] = hum_act;
   char data[200];
   serializeJson(doc, data);
-  int statusCode=0;
-  if(!Wio.HttpPost("http://fukai.mybluemix.net/post-data",data, &statusCode)){
+  int statusCode = 0;
+  if (!Wio.HttpPost("http://fukai.mybluemix.net/post-data", data, &statusCode)) {
     SerialUSB.println("ERROR in sending data!!");
-    
+
+  }
+  SerialUSB.print("Status code : ");
+  SerialUSB.println(statusCode);
+
+  if (SerialUART.available() > 0)
+  {
+    SerialUSB.println("date found");
+    input = SerialUART.readStringUntil('\n');
+    SerialUSB.println(input);
+  }else{
+    SerialUSB.println("No date found");
     }
-    SerialUSB.print("Status code : ");
-    SerialUSB.println(statusCode);
   delay(INTERVAL);
 }
 void readTrim()
