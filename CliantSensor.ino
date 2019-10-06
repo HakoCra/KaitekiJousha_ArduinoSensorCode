@@ -1,8 +1,9 @@
+#include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <SSCI_BME280.h>
 #include <WioCellLibforArduino.h>
-#include <String.h>
+
 
 
 #define BME280_ADDRESS 0x76
@@ -12,6 +13,9 @@
 #define PASSWORD          "sora"
 #define INTERVAL 5000
 #define READGPS WIO_UART_D23
+#define GPS_OVERFLOW_STRING "OVERFLOW"
+#define LEDPIN WIO_D38
+#define LEDNUM 30
 
 WioCellular Wio;
 char buff[128] = {'\0'};
@@ -19,6 +23,10 @@ int counter = 0;
 unsigned long int hum_raw, temp_raw, pres_raw;
 signed long int t_fine;
 String input;
+char GpsData[100];
+int GpsDataLength=0;
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(LEDNUM, LEDPIN, NEO_GRB + NEO_KHZ800);
+int led_num=0;
 
 uint16_t dig_T1;
 int16_t dig_T2;
@@ -53,15 +61,16 @@ void setup() {
   uint8_t ctrl_hum_reg  = osrs_h;
 
   SerialUSB.begin(115200);
-  SerialUART.begin(4800);
+  //SerialUART.begin(4800);
+ //SerialUART.print("$PUNV,CONFIG,00,00,0,1000,115200,01*0C\r\n");
   Wire.begin();
   writeReg(0xF2, ctrl_hum_reg);
   writeReg(0xF4, ctrl_meas_reg);
   writeReg(0xF5, config_reg);
   readTrim();
-
   Wio.Init();
-
+  pixels.begin();
+  pixels.clear();
   SerialUSB.println("### Power supply ON.");
   Wio.PowerSupplyCellular(true);
   Wio.PowerSupplyGrove(true);
@@ -82,14 +91,6 @@ void setup() {
     SerialUSB.println("### ERROR! ###");
     return;
   }
-  SerialUART.write("$PUNV,GETCONFIG,00*41");
-  if (SerialUART.available() > 0)
-  {
-    input = SerialUART.readStringUntil('\n');
-    SerialUSB.println(input);
-  }else{
-    SerialUSB.println("No date found");
-    }
   SerialUSB.println("### Setup completed.");
 }
 
@@ -135,15 +136,10 @@ void loop()
   }
   SerialUSB.print("Status code : ");
   SerialUSB.println(statusCode);
-
-  if (SerialUART.available() > 0)
-  {
-    SerialUSB.println("date found");
-    input = SerialUART.readStringUntil('\n');
-    SerialUSB.println(input);
-  }else{
-    SerialUSB.println("No date found");
-    }
+  float Res = calcDI(temp_act,hum_act);
+  SerialUSB.print("DI : ");
+  SerialUSB.println(Res);
+  LEDControl(Res);
   delay(INTERVAL);
 }
 void readTrim()
@@ -274,3 +270,37 @@ unsigned long int calibration_H(signed long int adc_H)
   v_x1 = (v_x1 > 419430400 ? 419430400 : v_x1);
   return (unsigned long int)(v_x1 >> 12);
 }
+const char* GpsRead() {
+  while (SerialUART.available()) {
+    char data = SerialUART.read();
+    if (data == '\r') continue;
+    if (data == '\n') {
+      GpsData[GpsDataLength] = '\0';
+      GpsDataLength = 0;
+      return GpsData;
+    }
+    
+    if (GpsDataLength > (int)sizeof(GpsData) - 1) { // Overflow
+      GpsDataLength = 0;
+      return GPS_OVERFLOW_STRING;
+    }
+    GpsData[GpsDataLength++] = data;
+  }
+
+  return NULL;
+}
+
+float calcDI(float temp,float hum){
+  return 0.81*temp + 0.01*hum * (0.99 * temp - 14.3) + 46.3;
+}
+void LEDControl(float di){
+  if(di<65){
+    pixels.setPixelColor(led_num,pixels.Color(0,map(di,65,60,255,0),map(di,65,0,0,255)));
+  }else if(di>=65){
+      pixels.setPixelColor(led_num,pixels.Color(map(di,65,100,0,255),map(di,65,70,255,0),0));
+  }
+
+  pixels.show();
+  led_num++;
+  if(led_num>30) led_num =0;
+  }
