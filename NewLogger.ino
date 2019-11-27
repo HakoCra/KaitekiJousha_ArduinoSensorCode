@@ -1,78 +1,205 @@
 /*
-Circuit structure
-ESP32 - (Middle layer) - Hardware
-5V - - GPS RED wire (+5V)
-GND - - GPS BLACK wire(0V)
-IO16 - - GPC White wire(RX)
-IO21 - 10Kohm - CCS811 SDA
-IO21 - 10Kohm - BM280 SDA
-IO22 - 10Kohm - CCS811 SLK
-IO22 - 10Kohm - BM280 SLK
-3.3V - -BM280 Vio
-3.3V - -BM280 Vcore
-3.3V - -BM280 CS8
-3.3V - -CCS811 3.3V
-GND - -BM280 GND
-GND - -BM280 SD0
-GND - -CCS811 GND
-IO4 - - CCS811 Wake
-IO5 - - CCS811 Reset
+Hardware - Middle ware - Component
+3.3V - CCS811 3.3V
+3.3V - BME280 Vio
+3.3V - BME280 Vcore
+3.3V - BME280 SD0
+GND - CCS811 GND
+GND - BME280 GND
+IO21 - BME280 SDI
+IO21 - CCS811 SDA
+IO22 - BME280 SCK
+IO22 - CCS811 SCK
+IO16 - GP-20Up TX
+5V - GP-20Up RED wire POW
+GND - GP-20Up BLACK wire GND
 */
-
-
-
+#include <Wire.h>
+#inc1lude <SparkFunBME280.h>
+#include <SparkFunCCS811.h>
 #include <TinyGPS++.h>
 #include <ArduinoJson.h>
-#include <Wire.h>
-#include <SSCI_BME280.h>
-#include <SparkFunCCS811.h>
 
-#define BME280_ADDRESS 0x76
-#define CCS811_ADDR 0x5B
+#define CCS811_ADDR 0x5B 
+#define PIN_NOT_WAKE 5
 #define UUID "Test0002"
 
+//Global sensor objects
+CCS811 myCCS811(CCS811_ADDR);
+BME280 myBME280;
 TinyGPSPlus gps;
-unsigned long int hum_raw, temp_raw, pres_raw;
-SSCI_BME280 bme280;
-CCS811 mySensor(CCS811_ADDR);
 
-
-void setup() {
-    Wire.begin();
-  // put your setup code here, to run once:
+void setup()
+{
   Serial.begin(115200);
   Serial2.begin(9600);
+  Serial.println();
+  Serial.println("Apply BME280 data to CCS811 for compensation.");
 
-  uint8_t osrs_t = 1;             //Temperature oversampling x 1
-  uint8_t osrs_p = 1;             //Pressure oversampling x 1
-  uint8_t osrs_h = 1;             //Humidity oversampling x 1
-  uint8_t bme280mode = 3;         //Normal mode
-  uint8_t t_sb = 5;               //Tstandby 1000ms
-  uint8_t filter = 0;             //Filter off
-  uint8_t spi3w_en = 0;           //3-wire SPI Disable
+  Wire.begin();
 
-  bme280.setMode(BME280_ADDRESS, osrs_t, osrs_p, osrs_h, bme280mode, t_sb, filter, spi3w_en);
+  //This begins the CCS811 sensor and prints error status of .begin()
+  CCS811Core::status returnCode = myCCS811.begin();
+  Serial.print("CCS811 begin exited with: ");
+  //Pass the error code to a function to print the results
+  printDriverError( returnCode );
+  Serial.println();
 
-  bme280.readTrim();
-  
-    CCS811Core::status returnCode = mySensor.begin();
-  if (returnCode != CCS811Core::SENSOR_SUCCESS)
+  //For I2C, enable the following and disable the SPI section
+  myBME280.settings.commInterface = I2C_MODE;
+  myBME280.settings.I2CAddress = 0x77;
+
+  //Initialize BME280
+  //For I2C, enable the following and disable the SPI section
+  myBME280.settings.commInterface = I2C_MODE;
+  myBME280.settings.I2CAddress = 0x77;
+  myBME280.settings.runMode = 3; //Normal mode
+  myBME280.settings.tStandby = 0;
+  myBME280.settings.filter = 4;
+  myBME280.settings.tempOverSample = 5;
+  myBME280.settings.pressOverSample = 5;
+  myBME280.settings.humidOverSample = 5;
+
+  //Calling .begin() causes the settings to be loaded
+  delay(10);  //Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.
+  myBME280.begin();
+
+
+}
+//---------------------------------------------------------------
+void loop()
+{
+  //Check to see if data is available
+  if (myCCS811.dataAvailable())
   {
-    Serial.println(".begin() returned with an error.");
-    while (1); //Hang if there was a problem.
+    //Calling this function updates the global tVOC and eCO2 variables
+    myCCS811.readAlgorithmResults();
+    //printInfoSerial fetches the values of tVOC and eCO2
+    printInfoSerial();
+
+    float BMEtempC = myBME280.readTempC();
+    float BMEhumid = myBME280.readFloatHumidity();
+
+    Serial.print("Applying new values (deg C, %): ");
+    Serial.print(BMEtempC);
+    Serial.print(",");
+    Serial.println(BMEhumid);
+    Serial.println();
+
+    //This sends the temperature data to the CCS811
+    myCCS811.setEnvironmentalData(BMEhumid, BMEtempC);
+  }
+  else if (myCCS811.checkForStatusError())
+  {
+    //If the CCS811 found an internal error, print it.
+    printSensorError();
   }
 
-  
+  delay(2000); //Wait for next reading
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-  /*
-    if(Serial2.available()){
-    int inByte = Serial2.read();
-    Serial.write(inByte);
-    }*/
+//---------------------------------------------------------------
+void printInfoSerial()
+{
+  //getCO2() gets the previously read data from the library
+  Serial.println("CCS811 data:");
+  Serial.print(" CO2 concentration : ");
+  Serial.print(myCCS811.getCO2());
+  Serial.println(" ppm");
 
+  //getTVOC() gets the previously read data from the library
+  Serial.print(" TVOC concentration : ");
+  Serial.print(myCCS811.getTVOC());
+  Serial.println(" ppb");
+
+  Serial.println("BME280 data:");
+  Serial.print(" Temperature: ");
+  Serial.print(myBME280.readTempC(), 2);
+  Serial.println(" degrees C");
+
+  Serial.print(" Temperature: ");
+  Serial.print(myBME280.readTempF(), 2);
+  Serial.println(" degrees F");
+
+  Serial.print(" Pressure: ");
+  Serial.print(myBME280.readFloatPressure(), 2);
+  Serial.println(" Pa");
+
+  Serial.print(" Pressure: ");
+  Serial.print((myBME280.readFloatPressure() * 0.0002953), 2);
+  Serial.println(" InHg");
+
+  Serial.print(" Altitude: ");
+  Serial.print(myBME280.readFloatAltitudeMeters(), 2);
+  Serial.println("m");
+
+  Serial.print(" Altitude: ");
+  Serial.print(myBME280.readFloatAltitudeFeet(), 2);
+  Serial.println("ft");
+
+  Serial.print(" %RH: ");
+  Serial.print(myBME280.readFloatHumidity(), 2);
+  Serial.println(" %");
+
+  Serial.println();
+
+  getGPSData();
+
+}
+
+//printDriverError decodes the CCS811Core::status type and prints the
+//type of error to the serial terminal.
+//
+//Save the return value of any function of type CCS811Core::status, then pass
+//to this function to see what the output was.
+void printDriverError( CCS811Core::status errorCode )
+{
+  switch ( errorCode )
+  {
+    case CCS811Core::SENSOR_SUCCESS:
+      Serial.print("SUCCESS");
+      break;
+    case CCS811Core::SENSOR_ID_ERROR:
+      Serial.print("ID_ERROR");
+      break;
+    case CCS811Core::SENSOR_I2C_ERROR:
+      Serial.print("I2C_ERROR");
+      break;
+    case CCS811Core::SENSOR_INTERNAL_ERROR:
+      Serial.print("INTERNAL_ERROR");
+      break;
+    case CCS811Core::SENSOR_GENERIC_ERROR:
+      Serial.print("GENERIC_ERROR");
+      break;
+    default:
+      Serial.print("Unspecified error.");
+  }
+}
+
+//printSensorError gets, clears, then prints the errors
+//saved within the error register.
+void printSensorError()
+{
+  uint8_t error = myCCS811.getErrorRegister();
+
+  if ( error == 0xFF ) //comm error
+  {
+    Serial.println("Failed to get ERROR_ID register.");
+  }
+  else
+  {
+    Serial.print("Error: ");
+    if (error & 1 << 5) Serial.print("HeaterSupply");
+    if (error & 1 << 4) Serial.print("HeaterFault");
+    if (error & 1 << 3) Serial.print("MaxResistance");
+    if (error & 1 << 2) Serial.print("MeasModeInvalid");
+    if (error & 1 << 1) Serial.print("ReadRegInvalid");
+    if (error & 1 << 0) Serial.print("MsgInvalid");
+    Serial.println();
+  }
+}
+
+void getGPSData(){
   while (Serial2.available()) {
     char c = Serial2.read();
     gps.encode(c);
@@ -81,40 +208,4 @@ void loop() {
       Serial.print("LONG: "); Serial.println(gps.location.lng(), 9);
     }
   }
-
-   double temp_act, press_act, hum_act; //最終的に表示される値を入れる変数
-
-  bme280.readData(&temp_act, &press_act, &hum_act);
-
-  Serial.print("TEMP : ");
-  Serial.print(temp_act);
-  Serial.print(" DegC  PRESS : ");
-  Serial.print(press_act);
-  Serial.print(" hPa  HUM : ");
-  Serial.print(hum_act);
-  Serial.println(" ");
-
-  if (mySensor.dataAvailable())
-  {
-    //If so, have the sensor read and calculate the results.
-    //Get them later
-    mySensor.readAlgorithmResults();
-
-    Serial.print("CO2[");
-    //Returns calculated CO2 reading
-    Serial.print(mySensor.getCO2());
-    Serial.print("] tVOC[");
-    //Returns calculated TVOC reading
-    Serial.print(mySensor.getTVOC());
-    Serial.print("] millis[");
-    //Simply the time since program start
-    Serial.print(millis());
-    Serial.print("]");
-    Serial.println();
-  }
-  /*
-    if (Serial.available()) {
-    int inByte = Serial.read();
-    Serial2.write(inByte);
-    }*/
 }
