@@ -26,8 +26,8 @@ GND - GP-20Up BLACK wire GND
 #define PIN_NOT_WAKE 5
 #define UID "52"
 
-const char* ssid = "YiPhone";
-const char* password = "Yuzuka457350";
+const char* ssid = "[SSID_HERE]";
+const char* password = "[SSID_PASSWORD_HERE]";
 const char* host="https://fukai.mybluemix.net/post-data";
 
 //Global sensor objects
