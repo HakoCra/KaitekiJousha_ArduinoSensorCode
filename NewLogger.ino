@@ -14,20 +14,31 @@ IO16 - GP-20Up TX
 5V - GP-20Up RED wire POW
 GND - GP-20Up BLACK wire GND
 */
+#include <WiFi.h>
 #include <Wire.h>
-#inc1lude <SparkFunBME280.h>
+#include <SparkFunBME280.h>
 #include <SparkFunCCS811.h>
 #include <TinyGPS++.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 
-#define CCS811_ADDR 0x5B 
+#define CCS811_ADDR 0x5B
 #define PIN_NOT_WAKE 5
-#define UUID "Test0002"
+#define UID "52"
+
+const char* ssid = "YiPhone";
+const char* password = "Yuzuka457350";
+const char* host="https://fukai.mybluemix.net/post-data";
 
 //Global sensor objects
 CCS811 myCCS811(CCS811_ADDR);
 BME280 myBME280;
 TinyGPSPlus gps;
+const size_t capacity = JSON_OBJECT_SIZE(9);
+
+/*main variables*/
+float tempareture, humidity, rh, pressure, lngi, lati;
+int co2, tvoc;
 
 void setup()
 {
@@ -63,7 +74,20 @@ void setup()
   //Calling .begin() causes the settings to be loaded
   delay(10);  //Make sure sensor had enough time to turn on. BME280 requires 2ms to start up.
   myBME280.begin();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
 
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected.");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 
 }
 //---------------------------------------------------------------
@@ -104,17 +128,20 @@ void printInfoSerial()
   //getCO2() gets the previously read data from the library
   Serial.println("CCS811 data:");
   Serial.print(" CO2 concentration : ");
-  Serial.print(myCCS811.getCO2());
+  co2 = myCCS811.getCO2();
+  Serial.print(co2);
   Serial.println(" ppm");
 
   //getTVOC() gets the previously read data from the library
   Serial.print(" TVOC concentration : ");
-  Serial.print(myCCS811.getTVOC());
+  tvoc = myCCS811.getTVOC();
+  Serial.print(tvoc);
   Serial.println(" ppb");
 
   Serial.println("BME280 data:");
   Serial.print(" Temperature: ");
-  Serial.print(myBME280.readTempC(), 2);
+  tempareture = myBME280.readTempC();
+  Serial.print(tempareture, 2);
   Serial.println(" degrees C");
 
   Serial.print(" Temperature: ");
@@ -122,7 +149,8 @@ void printInfoSerial()
   Serial.println(" degrees F");
 
   Serial.print(" Pressure: ");
-  Serial.print(myBME280.readFloatPressure(), 2);
+  pressure = myBME280.readFloatPressure();
+  Serial.print(pressure, 2);
   Serial.println(" Pa");
 
   Serial.print(" Pressure: ");
@@ -138,12 +166,25 @@ void printInfoSerial()
   Serial.println("ft");
 
   Serial.print(" %RH: ");
-  Serial.print(myBME280.readFloatHumidity(), 2);
+  rh = myBME280.readFloatHumidity();
+  Serial.print(rh, 2);
   Serial.println(" %");
 
   Serial.println();
+  while (Serial2.available()) {
+    char c = Serial2.read();
+    gps.encode(c);
+    if (gps.location.isUpdated()) {
+      Serial.print("LAT:  "); Serial.println(gps.location.lat(), 9);
+      Serial.print("LONG: "); Serial.println(gps.location.lng(), 9);
+      sendDataToServer(tempareture, humidity, rh, pressure, gps.location.lng(), gps.location.lat(), co2, tvoc);
+    }else{
+      Serial.print(c);
+      }
+  }
+  Serial.println("");
+  //sendDataToServer(tempareture, humidity, rh, pressure, 0.0000, 0.0000, co2, tvoc);
 
-  getGPSData();
 
 }
 
@@ -199,13 +240,43 @@ void printSensorError()
   }
 }
 
-void getGPSData(){
-  while (Serial2.available()) {
-    char c = Serial2.read();
-    gps.encode(c);
-    if (gps.location.isUpdated()) {
-      Serial.print("LAT:  "); Serial.println(gps.location.lat(), 9);
-      Serial.print("LONG: "); Serial.println(gps.location.lng(), 9);
-    }
+
+
+
+
+void sendDataToServer(float temp, float hum, float rh, float pre, float longi, float lati, int co2, int tvoc) {
+
+  StaticJsonDocument<capacity> doc;
+
+  JsonObject root = doc.to<JsonObject>();
+  root["line"] = UID;
+  root["temperature"] = temp;
+  root["humidity"] = hum;
+  root["pressure"] = pre;
+  root["longitude"] = longi;
+  root["latitude"] = lati;
+  root["co2"] = co2;
+  root["tvoc"] = tvoc;
+
+  char data[1024];
+  serializeJson(doc, data);
+  Serial.println(data);
+  
+  // post request
+  HTTPClient http;
+  http.begin(host);
+  http.addHeader("Content-Type", "application/json");
+  int status_code = http.POST((uint8_t*)data, strlen(data));
+  Serial.print("status Code : ");
+  Serial.println(status_code);
+  if( status_code == 200 ){
+    Stream* resp = http.getStreamPtr();
+
+    DynamicJsonDocument json_response(255);
+    deserializeJson(json_response, *resp);
+
+    serializeJson(json_response, Serial);
+    Serial.println("");
   }
+  http.end();
 }
